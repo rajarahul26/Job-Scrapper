@@ -33,6 +33,7 @@ from config import (
     SCRAPE_GLASSDOOR,
     SCRAPE_ZIPRECRUITER,
     SCRAPE_GOOGLE,
+    TITLE_KEYWORDS,
 )
 
 
@@ -50,6 +51,12 @@ def get_job_boards():
     if SCRAPE_GOOGLE:
         boards.append("google")
     return boards or ["indeed", "linkedin", "glassdoor"]
+
+
+def is_relevant_job(job: Dict) -> bool:
+    """Return True only if the job title contains at least one target keyword"""
+    title = str(job.get('title', '')).lower()
+    return any(keyword.lower() in title for keyword in TITLE_KEYWORDS)
 
 
 def scrape_all_jobs() -> List[Dict]:
@@ -79,15 +86,27 @@ def scrape_all_jobs() -> List[Dict]:
                 if hasattr(jobs, 'to_dict'):
                     jobs = jobs.to_dict('records')
 
+                # Filter to only relevant job titles
+                before = len(jobs)
+                jobs = [j for j in jobs if is_relevant_job(j)]
+                print(f"      ✓ Found {len(jobs)} relevant jobs ({before - len(jobs)} filtered out)")
                 all_jobs.extend(jobs)
-                print(f"      ✓ Found {len(jobs)} jobs")
 
             except Exception as e:
                 print(f"      ✗ Error scraping {role}: {str(e)}")
                 continue
 
-    print(f"\n✅ Total jobs found: {len(all_jobs)}\n")
-    return all_jobs
+    # Deduplicate by title + company (same job posted on multiple boards)
+    seen = set()
+    unique_jobs = []
+    for job in all_jobs:
+        key = (str(job.get('title', '')).lower(), str(job.get('company', '')).lower())
+        if key not in seen:
+            seen.add(key)
+            unique_jobs.append(job)
+
+    print(f"\n✅ Total relevant jobs after dedup: {len(unique_jobs)}\n")
+    return unique_jobs
 
 
 def save_to_csv(jobs: List[Dict]) -> str:

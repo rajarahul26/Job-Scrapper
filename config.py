@@ -45,6 +45,31 @@ SCRAPE_GLASSDOOR = True
 SCRAPE_ZIPRECRUITER = False  # Disabled - unreliable in current version
 SCRAPE_GOOGLE = False        # Disabled - unreliable in current version
 
+# Title filter — job title MUST contain at least one of these keywords (case-insensitive)
+# Any job that doesn't match gets thrown out. Add/remove as needed.
+TITLE_KEYWORDS = [
+    "IAM",
+    "PAM",
+    "CyberArk",
+    "Cyberark",
+    "Identity",
+    "Privileged Access",
+    "Access Management",
+    "Security Engineer",
+    "Security Architect",
+    "Cybersecurity",
+    "Cyber Security",
+    "Cloud Security",
+    "Incident Response",
+    "Penetration",
+    "Pen Test",
+    "SOC Analyst",
+    "Threat Intelligence",
+    "Information Security",
+    "Security Consultant",
+    "Security Analyst",
+]
+
 # =============================================================================
 # QUICK EDITING GUIDE:
 #

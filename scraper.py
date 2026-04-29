@@ -1,302 +1,298 @@
 #!/usr/bin/env python3
-# =============================================================================
-# SCRAPER.PY - MAIN JOB SCRAPER USING JOBSPY
-# =============================================================================
-
 import os
-import sys
-import csv
-import json
-from datetime import datetime, timedelta
-from typing import List, Dict
 import smtplib
-from email.mime.text import MIMEText
+from datetime import datetime, timedelta
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email import encoders
+from typing import List, Dict
 
-# JobSpy library
 from jobspy import scrape_jobs
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
-# Import config
 from config import (
-    JOB_ROLES,
-    LOCATIONS,
-    DAYS_BACK,
-    EMAIL_SENDER,
-    EMAIL_PASSWORD,
-    EMAIL_RECIPIENT,
-    OUTPUT_DIR,
-    OUTPUT_FILENAME_PREFIX,
-    RESULTS_PER_ROLE,
-    EMAIL_SUBJECT,
-    SCRAPE_LINKEDIN,
-    SCRAPE_INDEED,
-    SCRAPE_GLASSDOOR,
-    SCRAPE_ZIPRECRUITER,
-    SCRAPE_GOOGLE,
+    JOB_ROLES, LOCATIONS, DAYS_BACK,
+    EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECIPIENT,
+    OUTPUT_DIR, OUTPUT_FILENAME_PREFIX, RESULTS_PER_ROLE,
+    EMAIL_SUBJECT, SCRAPE_LINKEDIN, SCRAPE_INDEED,
+    SCRAPE_GLASSDOOR, SCRAPE_ZIPRECRUITER, SCRAPE_GOOGLE,
     TITLE_KEYWORDS,
 )
 
+# Columns to include in the Excel sheet (in order)
+EXCEL_COLUMNS = [
+    ("title",           "Job Title"),
+    ("company",         "Company"),
+    ("location",        "Location"),
+    ("job_type",        "Job Type"),
+    ("min_amount",      "Salary Min"),
+    ("max_amount",      "Salary Max"),
+    ("currency",        "Currency"),
+    ("date_posted",     "Date Posted"),
+    ("site",            "Source"),
+    ("job_url",         "Apply Link"),
+]
+
 
 def get_job_boards():
-    """Return list of job boards to scrape based on config"""
     boards = []
-    if SCRAPE_LINKEDIN:
-        boards.append("linkedin")
-    if SCRAPE_INDEED:
-        boards.append("indeed")
-    if SCRAPE_GLASSDOOR:
-        boards.append("glassdoor")
-    if SCRAPE_ZIPRECRUITER:
-        boards.append("zip_recruiter")
-    if SCRAPE_GOOGLE:
-        boards.append("google")
+    if SCRAPE_LINKEDIN:    boards.append("linkedin")
+    if SCRAPE_INDEED:      boards.append("indeed")
+    if SCRAPE_GLASSDOOR:   boards.append("glassdoor")
+    if SCRAPE_ZIPRECRUITER: boards.append("zip_recruiter")
+    if SCRAPE_GOOGLE:      boards.append("google")
     return boards or ["indeed", "linkedin", "glassdoor"]
 
 
 def is_relevant_job(job: Dict) -> bool:
-    """Return True only if the job title contains at least one target keyword"""
     title = str(job.get('title', '')).lower()
-    return any(keyword.lower() in title for keyword in TITLE_KEYWORDS)
+    return any(kw.lower() in title for kw in TITLE_KEYWORDS)
 
 
 def scrape_all_jobs() -> List[Dict]:
-    """Scrape jobs for all configured roles and locations"""
     all_jobs = []
-
-    print(f"🔍 Starting job scrape for {len(JOB_ROLES)} roles...")
-    print(f"📍 Locations: {', '.join(LOCATIONS)}")
-    print(f"📅 Looking back: {DAYS_BACK} days")
-    print(f"🔗 Job boards: {', '.join(get_job_boards())}\n")
+    print(f"🔍 Scraping {len(JOB_ROLES)} roles across {', '.join(get_job_boards())}\n")
 
     for role in JOB_ROLES:
         for location in LOCATIONS:
             try:
-                print(f"   Scraping: {role} in {location}...")
-
+                print(f"   → {role} in {location}...")
                 jobs = scrape_jobs(
                     site_name=get_job_boards(),
                     search_term=role,
                     location=location,
                     results_wanted=RESULTS_PER_ROLE,
-                    hours_old=DAYS_BACK * 24,  # Convert days to hours
+                    hours_old=DAYS_BACK * 24,
                     country_indeed="USA",
                 )
-
-                # Convert to list if it's a DataFrame
                 if hasattr(jobs, 'to_dict'):
                     jobs = jobs.to_dict('records')
 
-                # Filter to only relevant job titles
                 before = len(jobs)
                 jobs = [j for j in jobs if is_relevant_job(j)]
-                print(f"      ✓ Found {len(jobs)} relevant jobs ({before - len(jobs)} filtered out)")
                 all_jobs.extend(jobs)
+                print(f"      ✓ {len(jobs)} relevant ({before - len(jobs)} filtered out)")
 
             except Exception as e:
-                print(f"      ✗ Error scraping {role}: {str(e)}")
+                print(f"      ✗ Error: {str(e)}")
                 continue
 
-    # Deduplicate by title + company (same job posted on multiple boards)
+    # Deduplicate by title + company
     seen = set()
-    unique_jobs = []
+    unique = []
     for job in all_jobs:
         key = (str(job.get('title', '')).lower(), str(job.get('company', '')).lower())
         if key not in seen:
             seen.add(key)
-            unique_jobs.append(job)
+            unique.append(job)
 
-    print(f"\n✅ Total relevant jobs after dedup: {len(unique_jobs)}\n")
-    return unique_jobs
+    print(f"\n✅ Total unique relevant jobs: {len(unique)}\n")
+    return unique
 
 
-def save_to_csv(jobs: List[Dict]) -> str:
-    """Save jobs to CSV file"""
+def save_to_excel(jobs: List[Dict]) -> str:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-    # Create filename with today's date
     today = datetime.now().strftime("%Y-%m-%d")
-    filename = f"{OUTPUT_DIR}/{OUTPUT_FILENAME_PREFIX}-{today}.csv"
+    filename = f"{OUTPUT_DIR}/{OUTPUT_FILENAME_PREFIX}-{today}.xlsx"
 
-    if not jobs:
-        print("⚠️  No jobs to save!")
-        return filename
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Cybersecurity Jobs"
 
-    # Get all unique keys from jobs
-    fieldnames = set()
+    # --- Styles ---
+    header_fill   = PatternFill("solid", fgColor="1F4E79")
+    header_font   = Font(bold=True, color="FFFFFF", size=11)
+    link_font     = Font(color="0563C1", underline="single")
+    alt_fill      = PatternFill("solid", fgColor="EBF3FB")
+    border_side   = Side(style="thin", color="CCCCCC")
+    cell_border   = Border(
+        left=border_side, right=border_side,
+        top=border_side,  bottom=border_side
+    )
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+
+    # --- Header row ---
+    headers = [col[1] for col in EXCEL_COLUMNS]
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font      = header_font
+        cell.fill      = header_fill
+        cell.alignment = center
+        cell.border    = cell_border
+
+    # --- Data rows ---
+    for row_idx, job in enumerate(jobs, 2):
+        fill = alt_fill if row_idx % 2 == 0 else PatternFill()
+        for col_idx, (key, _) in enumerate(EXCEL_COLUMNS, 1):
+            value = job.get(key, "")
+            if value is None or str(value) in ("nan", "NaT", "None"):
+                value = ""
+
+            cell = ws.cell(row=row_idx, column=col_idx, value=str(value) if value != "" else "")
+            cell.border    = cell_border
+            cell.fill      = fill
+
+            # Make Apply Link clickable
+            if key == "job_url" and value:
+                cell.value     = "Apply Now"
+                cell.hyperlink = str(value)
+                cell.font      = link_font
+                cell.alignment = center
+            else:
+                cell.alignment = left
+
+    # --- Column widths ---
+    col_widths = {
+        "Job Title":    35,
+        "Company":      25,
+        "Location":     22,
+        "Job Type":     12,
+        "Salary Min":   12,
+        "Salary Max":   12,
+        "Currency":     10,
+        "Date Posted":  14,
+        "Source":       12,
+        "Apply Link":   14,
+    }
+    for col_idx, (_, label) in enumerate(EXCEL_COLUMNS, 1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = col_widths.get(label, 15)
+
+    # Freeze header row
+    ws.freeze_panes = "A2"
+
+    # Auto-filter on header row
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(EXCEL_COLUMNS))}1"
+
+    wb.save(filename)
+    print(f"💾 Saved {len(jobs)} jobs to Excel: {filename}")
+    return filename
+
+
+def send_email(jobs: List[Dict], excel_filename: str):
+    sender    = os.environ.get('EMAIL_SENDER',    EMAIL_SENDER)
+    password  = os.environ.get('EMAIL_PASSWORD',  EMAIL_PASSWORD)
+    recipient = os.environ.get('EMAIL_RECIPIENT', EMAIL_RECIPIENT)
+
+    print(f"📧 Sending from: {sender} → {recipient}")
+
+    # Count by source for summary
+    sources = {}
     for job in jobs:
-        fieldnames.update(job.keys())
-    fieldnames = sorted(list(fieldnames))
+        src = str(job.get('site', 'Unknown'))
+        sources[src] = sources.get(src, 0) + 1
 
-    # Write CSV
+    source_rows = ''.join([
+        f"<tr><td style='padding:8px 12px;border-bottom:1px solid #ddd;'>{s}</td>"
+        f"<td style='padding:8px 12px;border-bottom:1px solid #ddd;text-align:center;'>{c}</td></tr>"
+        for s, c in sorted(sources.items(), key=lambda x: x[1], reverse=True)
+    ])
+
+    # Count by role
+    role_counts = {}
+    for job in jobs:
+        t = str(job.get('title', 'Unknown'))
+        role_counts[t] = role_counts.get(t, 0) + 1
+    top_roles = sorted(role_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    role_rows = ''.join([
+        f"<tr><td style='padding:8px 12px;border-bottom:1px solid #ddd;'>{t}</td>"
+        f"<td style='padding:8px 12px;border-bottom:1px solid #ddd;text-align:center;'>{c}</td></tr>"
+        for t, c in top_roles
+    ])
+
+    html = f"""
+    <html><body style="font-family:Arial,sans-serif;color:#333;max-width:640px;margin:0 auto;padding:20px;">
+      <h1 style="color:#1F4E79;border-bottom:3px solid #2E75B6;padding-bottom:10px;">
+        Weekly Cybersecurity Jobs Report
+      </h1>
+      <div style="background:#EBF3FB;padding:15px;border-radius:6px;margin:16px 0;">
+        <p><strong>Total Jobs Found:</strong> {len(jobs)}</p>
+        <p><strong>Period:</strong> Last {DAYS_BACK} day(s)</p>
+        <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC</p>
+        <p><strong>Next Run:</strong> {(datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')}</p>
+      </div>
+
+      <h2 style="color:#1F4E79;">Top Job Titles Found</h2>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr style="background:#1F4E79;color:#fff;">
+          <th style="padding:10px 12px;text-align:left;">Job Title</th>
+          <th style="padding:10px 12px;text-align:center;">Count</th>
+        </tr>
+        {role_rows}
+      </table>
+
+      <h2 style="color:#1F4E79;">Jobs by Source</h2>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr style="background:#1F4E79;color:#fff;">
+          <th style="padding:10px 12px;text-align:left;">Job Board</th>
+          <th style="padding:10px 12px;text-align:center;">Count</th>
+        </tr>
+        {source_rows}
+      </table>
+
+      <div style="background:#FFF3CD;border-left:4px solid #FFC107;padding:12px;margin:20px 0;">
+        <strong>Excel file attached</strong> — open it for all {len(jobs)} listings
+        with clickable <em>Apply Now</em> links, salaries, locations, and dates.
+      </div>
+
+      <h2 style="color:#1F4E79;">Roles Searched</h2>
+      <ul>{''.join(f'<li>{r}</li>' for r in JOB_ROLES)}</ul>
+
+      <p style="color:#999;font-size:12px;margin-top:30px;">
+        Automated weekly job scraper · Next run {(datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')}
+      </p>
+    </body></html>
+    """
+
     try:
-        with open(filename, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(jobs)
-
-        print(f"💾 Saved {len(jobs)} jobs to: {filename}")
-        return filename
-
-    except Exception as e:
-        print(f"❌ Error saving CSV: {str(e)}")
-        return None
-
-
-def send_email(jobs: List[Dict], csv_filename: str):
-    """Send results email to recipient"""
-    if not jobs:
-        print("⚠️  No jobs to email!")
-        return
-
-    # Read credentials from environment variables (GitHub Secrets) first, then config fallback
-    sender   = os.environ.get('EMAIL_SENDER',    EMAIL_SENDER)
-    password = os.environ.get('EMAIL_PASSWORD',  EMAIL_PASSWORD)
-    recipient= os.environ.get('EMAIL_RECIPIENT', EMAIL_RECIPIENT)
-
-    print(f"📧 Sending from: {sender} → to: {recipient}")
-
-    try:
-        # Create email body
-        email_body = create_email_body(jobs)
-
-        # Create message
-        msg = MIMEMultipart('alternative')
+        msg = MIMEMultipart('mixed')
         msg['Subject'] = EMAIL_SUBJECT
-        msg['From'] = sender
-        msg['To'] = recipient
+        msg['From']    = sender
+        msg['To']      = recipient
+        msg.attach(MIMEText(html, 'html'))
 
-        # Attach HTML content
-        msg.attach(MIMEText(email_body, 'html'))
+        # Attach Excel file
+        with open(excel_filename, 'rb') as f:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(f.read())
+            encoders.encode_base64(part)
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename="{os.path.basename(excel_filename)}"'
+            )
+            msg.attach(part)
 
-        # Send via Gmail SMTP (port 587 + TLS)
         with smtplib.SMTP('smtp.gmail.com', 587) as server:
             server.ehlo()
             server.starttls()
             server.login(sender, password)
             server.send_message(msg)
 
-        print(f"📧 Email sent successfully to {recipient}")
+        print(f"📧 Email + Excel attachment sent to {recipient}")
 
     except Exception as e:
-        print(f"❌ Error sending email: {str(e)}")
-        print("   Make sure EMAIL_SENDER and EMAIL_PASSWORD GitHub Secrets are correct")
-
-
-def create_email_body(jobs: List[Dict]) -> str:
-    """Create HTML email body with job summary"""
-
-    # Count jobs by title
-    job_titles = {}
-    for job in jobs:
-        title = job.get('title', 'Unknown')
-        job_titles[title] = job_titles.get(title, 0) + 1
-
-    # Create job summary rows
-    summary_rows = ''.join([
-        f"<tr><td style='padding: 10px; border-bottom: 1px solid #ddd;'><strong>{title}</strong></td><td style='padding: 10px; border-bottom: 1px solid #ddd; text-align: center;'>{count}</td></tr>"
-        for title, count in sorted(job_titles.items(), key=lambda x: x[1], reverse=True)
-    ])
-
-    # Count by source
-    sources = {}
-    for job in jobs:
-        source = job.get('site', 'Unknown')
-        sources[source] = sources.get(source, 0) + 1
-
-    source_rows = ''.join([
-        f"<tr><td style='padding: 10px; border-bottom: 1px solid #ddd;'>{source}</td><td style='padding: 10px; border-bottom: 1px solid #ddd; text-align: center;'>{count}</td></tr>"
-        for source, count in sorted(sources.items(), key=lambda x: x[1], reverse=True)
-    ])
-
-    html = f"""
-    <html>
-    <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-            h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
-            h2 {{ color: #34495e; margin-top: 20px; }}
-            table {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
-            th {{ background-color: #3498db; color: white; padding: 12px; text-align: left; }}
-            td {{ padding: 10px; border-bottom: 1px solid #ddd; }}
-            .summary {{ background-color: #ecf0f1; padding: 15px; border-radius: 5px; margin: 15px 0; }}
-            .timestamp {{ color: #7f8c8d; font-size: 12px; margin-top: 20px; }}
-            .note {{ background-color: #fff3cd; padding: 10px; border-left: 4px solid #ffc107; margin: 15px 0; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🔍 Weekly Cybersecurity Job Scraper Results</h1>
-
-            <div class="summary">
-                <p><strong>📊 Total Jobs Found:</strong> {len(jobs)}</p>
-                <p><strong>📅 Period:</strong> Last {DAYS_BACK} day(s)</p>
-                <p><strong>🕐 Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-            </div>
-
-            <h2>📌 Jobs by Role</h2>
-            <table>
-                <tr>
-                    <th>Job Title</th>
-                    <th style="text-align: center;">Count</th>
-                </tr>
-                {summary_rows}
-            </table>
-
-            <h2>🔗 Jobs by Source</h2>
-            <table>
-                <tr>
-                    <th>Job Board</th>
-                    <th style="text-align: center;">Count</th>
-                </tr>
-                {source_rows}
-            </table>
-
-            <div class="note">
-                <strong>📥 Full Results:</strong> See attached CSV file for complete job details including links, salaries, and descriptions.
-            </div>
-
-            <h2>🔍 Roles Searched</h2>
-            <ul>
-                {''.join([f'<li>{role}</li>' for role in JOB_ROLES])}
-            </ul>
-
-            <p class="timestamp">
-                <em>This email was generated by your automated job scraper.
-                <br>Next run: {(datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')}</em>
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-
-    return html
+        print(f"❌ Email error: {str(e)}")
 
 
 def main():
-    """Main execution"""
     print("=" * 60)
     print("🚀 CYBERSECURITY JOB SCRAPER")
     print("=" * 60 + "\n")
 
-    # Scrape jobs
     jobs = scrape_all_jobs()
 
     if not jobs:
-        print("❌ No jobs found. Exiting.")
+        print("❌ No jobs found.")
         return
 
-    # Save to CSV
-    csv_filename = save_to_csv(jobs)
-
-    # Send email
-    if EMAIL_SENDER and EMAIL_PASSWORD and EMAIL_RECIPIENT:
-        send_email(jobs, csv_filename)
-    else:
-        print("⚠️  Email credentials not configured. Skipping email.")
+    excel_file = save_to_excel(jobs)
+    send_email(jobs, excel_file)
 
     print("\n" + "=" * 60)
-    print("✅ JOB SCRAPE COMPLETE!")
+    print("✅ DONE!")
     print("=" * 60)
 
 

@@ -148,6 +148,13 @@ def send_email(jobs: List[Dict], csv_filename: str):
         print("⚠️  No jobs to email!")
         return
 
+    # Read credentials from environment variables (GitHub Secrets) first, then config fallback
+    sender   = os.environ.get('EMAIL_SENDER',    EMAIL_SENDER)
+    password = os.environ.get('EMAIL_PASSWORD',  EMAIL_PASSWORD)
+    recipient= os.environ.get('EMAIL_RECIPIENT', EMAIL_RECIPIENT)
+
+    print(f"📧 Sending from: {sender} → to: {recipient}")
+
     try:
         # Create email body
         email_body = create_email_body(jobs)
@@ -155,22 +162,24 @@ def send_email(jobs: List[Dict], csv_filename: str):
         # Create message
         msg = MIMEMultipart('alternative')
         msg['Subject'] = EMAIL_SUBJECT
-        msg['From'] = EMAIL_SENDER
-        msg['To'] = EMAIL_RECIPIENT
+        msg['From'] = sender
+        msg['To'] = recipient
 
         # Attach HTML content
         msg.attach(MIMEText(email_body, 'html'))
 
-        # Send email
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        # Send via Gmail SMTP (port 587 + TLS)
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(sender, password)
             server.send_message(msg)
 
-        print(f"📧 Email sent successfully to {EMAIL_RECIPIENT}")
+        print(f"📧 Email sent successfully to {recipient}")
 
     except Exception as e:
         print(f"❌ Error sending email: {str(e)}")
-        print("   Make sure your Gmail App Password is correct (see README.md)")
+        print("   Make sure EMAIL_SENDER and EMAIL_PASSWORD GitHub Secrets are correct")
 
 
 def create_email_body(jobs: List[Dict]) -> str:

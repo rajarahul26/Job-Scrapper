@@ -46,10 +46,10 @@ def get_job_boards():
     if SCRAPE_GLASSDOOR:
         boards.append("glassdoor")
     if SCRAPE_ZIPRECRUITER:
-        boards.append("ziprecruiter")
+        boards.append("zip_recruiter")
     if SCRAPE_GOOGLE:
         boards.append("google")
-    return boards
+    return boards or ["indeed", "linkedin", "glassdoor"]
 
 
 def scrape_all_jobs() -> List[Dict]:

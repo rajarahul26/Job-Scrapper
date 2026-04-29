@@ -42,8 +42,8 @@ EMAIL_SUBJECT = "Weekly Cybersecurity Job Scraper Results - IAM/PAM/Security Rol
 SCRAPE_LINKEDIN = True
 SCRAPE_INDEED = True
 SCRAPE_GLASSDOOR = True
-SCRAPE_ZIPRECRUITER = True
-SCRAPE_GOOGLE = True
+SCRAPE_ZIPRECRUITER = False  # Disabled - unreliable in current version
+SCRAPE_GOOGLE = False        # Disabled - unreliable in current version
 
 # =============================================================================
 # QUICK EDITING GUIDE:

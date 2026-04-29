@@ -1,5 +1,4 @@
-jobspy==2.1.5
+jobspy==0.31.0
 pandas>=2.0.0
-selenium>=4.10.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0

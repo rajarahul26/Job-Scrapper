@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import smtplib
+import requests
 from datetime import datetime, timedelta
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -19,32 +20,31 @@ from config import (
     OUTPUT_DIR, OUTPUT_FILENAME_PREFIX, RESULTS_PER_ROLE,
     EMAIL_SUBJECT, SCRAPE_LINKEDIN, SCRAPE_INDEED,
     SCRAPE_GLASSDOOR, SCRAPE_ZIPRECRUITER, SCRAPE_GOOGLE,
-    TITLE_KEYWORDS,
+    SCRAPE_DICE, JOB_TYPE, REMOTE_ONLY, TITLE_KEYWORDS,
 )
 
-# Columns to include in the Excel sheet (in order)
 EXCEL_COLUMNS = [
-    ("title",           "Job Title"),
-    ("company",         "Company"),
-    ("location",        "Location"),
-    ("job_type",        "Job Type"),
-    ("min_amount",      "Salary Min"),
-    ("max_amount",      "Salary Max"),
-    ("currency",        "Currency"),
-    ("date_posted",     "Date Posted"),
-    ("site",            "Source"),
-    ("job_url",         "Apply Link"),
+    ("title",       "Job Title"),
+    ("company",     "Company"),
+    ("location",    "Location"),
+    ("job_type",    "Job Type"),
+    ("min_amount",  "Salary Min"),
+    ("max_amount",  "Salary Max"),
+    ("currency",    "Currency"),
+    ("date_posted", "Date Posted"),
+    ("site",        "Source"),
+    ("job_url",     "Apply Link"),
 ]
 
 
 def get_job_boards():
     boards = []
-    if SCRAPE_LINKEDIN:    boards.append("linkedin")
-    if SCRAPE_INDEED:      boards.append("indeed")
-    if SCRAPE_GLASSDOOR:   boards.append("glassdoor")
-    if SCRAPE_ZIPRECRUITER: boards.append("zip_recruiter")
-    if SCRAPE_GOOGLE:      boards.append("google")
-    return boards or ["indeed", "linkedin", "glassdoor"]
+    if SCRAPE_LINKEDIN:      boards.append("linkedin")
+    if SCRAPE_INDEED:        boards.append("indeed")
+    if SCRAPE_GLASSDOOR:     boards.append("glassdoor")
+    if SCRAPE_ZIPRECRUITER:  boards.append("zip_recruiter")
+    if SCRAPE_GOOGLE:        boards.append("google")
+    return boards or ["indeed", "linkedin"]
 
 
 def is_relevant_job(job: Dict) -> bool:
@@ -52,21 +52,74 @@ def is_relevant_job(job: Dict) -> bool:
     return any(kw.lower() in title for kw in TITLE_KEYWORDS)
 
 
+def scrape_dice(role: str) -> List[Dict]:
+    """Scrape Dice.com for contract + remote jobs via their public API"""
+    jobs = []
+    try:
+        # Dice public job search API
+        url = "https://job-search-api.svc.dhigroupinc.com/v1/dice/jobs/search"
+        params = {
+            "q": role,
+            "countryCode": "US",
+            "radius": 30,
+            "radiusUnit": "mi",
+            "page": 1,
+            "pageSize": RESULTS_PER_ROLE,
+            "language": "en",
+            "eid": "search",
+            "filters.employmentType": "CONTRACTS",
+            "filters.isRemote": "true",
+            "filters.postedDate": "ONE_WEEK",
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "x-api-key": "1YAt0R9wBg4WfsF9VB2778F5CHLAPMVH",
+        }
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            print(f"      ⚠ Dice returned status {resp.status_code}")
+            return jobs
+
+        data = resp.json()
+        for item in data.get("data", []):
+            jobs.append({
+                "title":       item.get("title", ""),
+                "company":     item.get("companyPageUrl", "").split("/")[-1] or item.get("companyName", ""),
+                "location":    item.get("location", "Remote"),
+                "job_type":    "Contract",
+                "min_amount":  None,
+                "max_amount":  None,
+                "currency":    "USD",
+                "date_posted": item.get("postedDate", ""),
+                "site":        "dice",
+                "job_url":     f"https://www.dice.com/job-detail/{item.get('id', '')}",
+            })
+    except Exception as e:
+        print(f"      ✗ Dice error: {str(e)}")
+    return jobs
+
+
 def scrape_all_jobs() -> List[Dict]:
     all_jobs = []
-    print(f"🔍 Scraping {len(JOB_ROLES)} roles across {', '.join(get_job_boards())}\n")
+    boards = get_job_boards()
+    print(f"🔍 Scraping {len(JOB_ROLES)} roles | type={JOB_TYPE} | remote={REMOTE_ONLY}")
+    print(f"🔗 Boards: {', '.join(boards)}{' + dice' if SCRAPE_DICE else ''}\n")
 
     for role in JOB_ROLES:
         for location in LOCATIONS:
+            # --- JobSpy boards (LinkedIn, Indeed, Glassdoor) ---
             try:
-                print(f"   → {role} in {location}...")
+                print(f"   → {role} [{', '.join(boards)}]...")
                 jobs = scrape_jobs(
-                    site_name=get_job_boards(),
+                    site_name=boards,
                     search_term=role,
                     location=location,
                     results_wanted=RESULTS_PER_ROLE,
                     hours_old=DAYS_BACK * 24,
                     country_indeed="USA",
+                    is_remote=REMOTE_ONLY,
+                    job_type=JOB_TYPE,
                 )
                 if hasattr(jobs, 'to_dict'):
                     jobs = jobs.to_dict('records')
@@ -77,8 +130,16 @@ def scrape_all_jobs() -> List[Dict]:
                 print(f"      ✓ {len(jobs)} relevant ({before - len(jobs)} filtered out)")
 
             except Exception as e:
-                print(f"      ✗ Error: {str(e)}")
-                continue
+                print(f"      ✗ JobSpy error for {role}: {str(e)}")
+
+            # --- Dice ---
+            if SCRAPE_DICE:
+                print(f"   → {role} [dice]...")
+                dice_jobs = scrape_dice(role)
+                before = len(dice_jobs)
+                dice_jobs = [j for j in dice_jobs if is_relevant_job(j)]
+                all_jobs.extend(dice_jobs)
+                print(f"      ✓ {len(dice_jobs)} relevant from Dice ({before - len(dice_jobs)} filtered out)")
 
     # Deduplicate by title + company
     seen = set()
@@ -89,7 +150,7 @@ def scrape_all_jobs() -> List[Dict]:
             seen.add(key)
             unique.append(job)
 
-    print(f"\n✅ Total unique relevant jobs: {len(unique)}\n")
+    print(f"\n✅ Total unique remote contract jobs: {len(unique)}\n")
     return unique
 
 
@@ -102,41 +163,34 @@ def save_to_excel(jobs: List[Dict]) -> str:
     ws = wb.active
     ws.title = "Cybersecurity Jobs"
 
-    # --- Styles ---
-    header_fill   = PatternFill("solid", fgColor="1F4E79")
-    header_font   = Font(bold=True, color="FFFFFF", size=11)
-    link_font     = Font(color="0563C1", underline="single")
-    alt_fill      = PatternFill("solid", fgColor="EBF3FB")
-    border_side   = Side(style="thin", color="CCCCCC")
-    cell_border   = Border(
+    header_fill = PatternFill("solid", fgColor="1F4E79")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    link_font   = Font(color="0563C1", underline="single")
+    alt_fill    = PatternFill("solid", fgColor="EBF3FB")
+    border_side = Side(style="thin", color="CCCCCC")
+    cell_border = Border(
         left=border_side, right=border_side,
-        top=border_side,  bottom=border_side
+        top=border_side,  bottom=border_side,
     )
     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     left   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
 
-    # --- Header row ---
-    headers = [col[1] for col in EXCEL_COLUMNS]
-    for col_idx, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
-        cell.font      = header_font
-        cell.fill      = header_fill
+    for col_idx, (_, label) in enumerate(EXCEL_COLUMNS, 1):
+        cell = ws.cell(row=1, column=col_idx, value=label)
+        cell.font = header_font
+        cell.fill = header_fill
         cell.alignment = center
-        cell.border    = cell_border
+        cell.border = cell_border
 
-    # --- Data rows ---
     for row_idx, job in enumerate(jobs, 2):
         fill = alt_fill if row_idx % 2 == 0 else PatternFill()
         for col_idx, (key, _) in enumerate(EXCEL_COLUMNS, 1):
             value = job.get(key, "")
             if value is None or str(value) in ("nan", "NaT", "None"):
                 value = ""
-
             cell = ws.cell(row=row_idx, column=col_idx, value=str(value) if value != "" else "")
             cell.border    = cell_border
             cell.fill      = fill
-
-            # Make Apply Link clickable
             if key == "job_url" and value:
                 cell.value     = "Apply Now"
                 cell.hyperlink = str(value)
@@ -145,30 +199,19 @@ def save_to_excel(jobs: List[Dict]) -> str:
             else:
                 cell.alignment = left
 
-    # --- Column widths ---
     col_widths = {
-        "Job Title":    35,
-        "Company":      25,
-        "Location":     22,
-        "Job Type":     12,
-        "Salary Min":   12,
-        "Salary Max":   12,
-        "Currency":     10,
-        "Date Posted":  14,
-        "Source":       12,
-        "Apply Link":   14,
+        "Job Title": 35, "Company": 25, "Location": 22, "Job Type": 12,
+        "Salary Min": 12, "Salary Max": 12, "Currency": 10,
+        "Date Posted": 14, "Source": 12, "Apply Link": 14,
     }
     for col_idx, (_, label) in enumerate(EXCEL_COLUMNS, 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = col_widths.get(label, 15)
 
-    # Freeze header row
     ws.freeze_panes = "A2"
-
-    # Auto-filter on header row
     ws.auto_filter.ref = f"A1:{get_column_letter(len(EXCEL_COLUMNS))}1"
 
     wb.save(filename)
-    print(f"💾 Saved {len(jobs)} jobs to Excel: {filename}")
+    print(f"💾 Saved {len(jobs)} jobs → {filename}")
     return filename
 
 
@@ -177,9 +220,8 @@ def send_email(jobs: List[Dict], excel_filename: str):
     password  = os.environ.get('EMAIL_PASSWORD',  EMAIL_PASSWORD)
     recipient = os.environ.get('EMAIL_RECIPIENT', EMAIL_RECIPIENT)
 
-    print(f"📧 Sending from: {sender} → {recipient}")
+    print(f"📧 Sending to {recipient}...")
 
-    # Count by source for summary
     sources = {}
     for job in jobs:
         src = str(job.get('site', 'Unknown'))
@@ -191,7 +233,6 @@ def send_email(jobs: List[Dict], excel_filename: str):
         for s, c in sorted(sources.items(), key=lambda x: x[1], reverse=True)
     ])
 
-    # Count by role
     role_counts = {}
     for job in jobs:
         t = str(job.get('title', 'Unknown'))
@@ -206,43 +247,38 @@ def send_email(jobs: List[Dict], excel_filename: str):
     html = f"""
     <html><body style="font-family:Arial,sans-serif;color:#333;max-width:640px;margin:0 auto;padding:20px;">
       <h1 style="color:#1F4E79;border-bottom:3px solid #2E75B6;padding-bottom:10px;">
-        Weekly Cybersecurity Jobs Report
+        Weekly Cybersecurity Jobs — Remote Contract Only
       </h1>
       <div style="background:#EBF3FB;padding:15px;border-radius:6px;margin:16px 0;">
         <p><strong>Total Jobs Found:</strong> {len(jobs)}</p>
-        <p><strong>Period:</strong> Last {DAYS_BACK} day(s)</p>
+        <p><strong>Filter:</strong> Remote · Contract · Last {DAYS_BACK} days</p>
+        <p><strong>Sources:</strong> LinkedIn, Indeed, Glassdoor, Dice</p>
         <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC</p>
         <p><strong>Next Run:</strong> {(datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')}</p>
       </div>
 
-      <h2 style="color:#1F4E79;">Top Job Titles Found</h2>
+      <h2 style="color:#1F4E79;">Top Job Titles</h2>
       <table style="width:100%;border-collapse:collapse;">
         <tr style="background:#1F4E79;color:#fff;">
           <th style="padding:10px 12px;text-align:left;">Job Title</th>
           <th style="padding:10px 12px;text-align:center;">Count</th>
-        </tr>
-        {role_rows}
+        </tr>{role_rows}
       </table>
 
-      <h2 style="color:#1F4E79;">Jobs by Source</h2>
+      <h2 style="color:#1F4E79;">By Source</h2>
       <table style="width:100%;border-collapse:collapse;">
         <tr style="background:#1F4E79;color:#fff;">
           <th style="padding:10px 12px;text-align:left;">Job Board</th>
           <th style="padding:10px 12px;text-align:center;">Count</th>
-        </tr>
-        {source_rows}
+        </tr>{source_rows}
       </table>
 
       <div style="background:#FFF3CD;border-left:4px solid #FFC107;padding:12px;margin:20px 0;">
-        <strong>Excel file attached</strong> — open it for all {len(jobs)} listings
-        with clickable <em>Apply Now</em> links, salaries, locations, and dates.
+        <strong>Excel attached</strong> — {len(jobs)} listings with clickable Apply Now links.
       </div>
-
-      <h2 style="color:#1F4E79;">Roles Searched</h2>
       <ul>{''.join(f'<li>{r}</li>' for r in JOB_ROLES)}</ul>
-
       <p style="color:#999;font-size:12px;margin-top:30px;">
-        Automated weekly job scraper · Next run {(datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')}
+        Next run: {(datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')}
       </p>
     </body></html>
     """
@@ -254,15 +290,12 @@ def send_email(jobs: List[Dict], excel_filename: str):
         msg['To']      = recipient
         msg.attach(MIMEText(html, 'html'))
 
-        # Attach Excel file
         with open(excel_filename, 'rb') as f:
             part = MIMEBase('application', 'octet-stream')
             part.set_payload(f.read())
             encoders.encode_base64(part)
-            part.add_header(
-                'Content-Disposition',
-                f'attachment; filename="{os.path.basename(excel_filename)}"'
-            )
+            part.add_header('Content-Disposition',
+                            f'attachment; filename="{os.path.basename(excel_filename)}"')
             msg.attach(part)
 
         with smtplib.SMTP('smtp.gmail.com', 587) as server:
@@ -271,7 +304,7 @@ def send_email(jobs: List[Dict], excel_filename: str):
             server.login(sender, password)
             server.send_message(msg)
 
-        print(f"📧 Email + Excel attachment sent to {recipient}")
+        print(f"📧 Email + Excel sent to {recipient}")
 
     except Exception as e:
         print(f"❌ Email error: {str(e)}")
@@ -279,7 +312,7 @@ def send_email(jobs: List[Dict], excel_filename: str):
 
 def main():
     print("=" * 60)
-    print("🚀 CYBERSECURITY JOB SCRAPER")
+    print("🚀 CYBERSECURITY JOB SCRAPER — Remote Contract Only")
     print("=" * 60 + "\n")
 
     jobs = scrape_all_jobs()

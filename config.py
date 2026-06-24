@@ -38,12 +38,19 @@ RESULTS_PER_ROLE = 30  # Number of job listings per role (max ~50)
 # Email subject line
 EMAIL_SUBJECT = "Weekly Cybersecurity Job Scraper Results - IAM/PAM/Security Roles"
 
-# Job boards to scrape (leave all True for maximum coverage)
+# Job type filter — "contract" | "fulltime" | "parttime" | None (None = all types)
+JOB_TYPE = "contract"
+
+# Remote only — True = only remote jobs, False = all locations
+REMOTE_ONLY = True
+
+# Job boards to scrape
 SCRAPE_LINKEDIN = True
 SCRAPE_INDEED = True
 SCRAPE_GLASSDOOR = True
-SCRAPE_ZIPRECRUITER = False  # Disabled - unreliable in current version
-SCRAPE_GOOGLE = False        # Disabled - unreliable in current version
+SCRAPE_DICE = True           # Dice.com — great for contract/IT roles
+SCRAPE_ZIPRECRUITER = False  # Disabled - unreliable
+SCRAPE_GOOGLE = False        # Disabled - unreliable
 
 # Title filter — job title MUST contain at least one of these keywords (case-insensitive)
 # Any job that doesn't match gets thrown out. Add/remove as needed.
@@ -73,15 +80,10 @@ TITLE_KEYWORDS = [
 # =============================================================================
 # QUICK EDITING GUIDE:
 #
-# 1. ADD A JOB ROLE:
-#    Add to JOB_ROLES list, e.g., "Security Operations Manager"
-#
-# 2. CHANGE EMAIL RECIPIENT:
-#    Update EMAIL_RECIPIENT = "newemail@gmail.com"
-#
-# 3. ADJUST HOW MANY DAYS BACK:
-#    Change DAYS_BACK = 14 (for 2 weeks instead of 1)
-#
-# 4. EXCLUDE A JOB BOARD:
-#    Set SCRAPE_LINKEDIN = False (etc.)
+# 1. ADD A JOB ROLE:      Add to JOB_ROLES list
+# 2. CHANGE JOB TYPE:     JOB_TYPE = "fulltime" | "contract" | None (all)
+# 3. TOGGLE REMOTE:       REMOTE_ONLY = True | False
+# 4. CHANGE EMAIL:        Update EMAIL_RECIPIENT
+# 5. ADJUST DATE RANGE:   DAYS_BACK = 14 (2 weeks), 30 (1 month)
+# 6. TOGGLE JOB BOARDS:   Set SCRAPE_DICE = False etc.
 # =============================================================================

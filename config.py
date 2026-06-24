@@ -47,7 +47,7 @@ REMOTE_ONLY = True
 # Job boards to scrape
 SCRAPE_LINKEDIN = True
 SCRAPE_INDEED = True
-SCRAPE_GLASSDOOR = True
+SCRAPE_GLASSDOOR = False     # Disabled - blocks automated requests
 SCRAPE_DICE = True           # Dice.com — great for contract/IT roles
 SCRAPE_ZIPRECRUITER = False  # Disabled - unreliable
 SCRAPE_GOOGLE = False        # Disabled - unreliable

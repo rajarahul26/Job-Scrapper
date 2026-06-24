@@ -53,50 +53,87 @@ def is_relevant_job(job: Dict) -> bool:
 
 
 def scrape_dice(role: str) -> List[Dict]:
-    """Scrape Dice.com for contract + remote jobs via their public API"""
+    """Scrape Dice.com for contract + remote jobs via their search API"""
     jobs = []
     try:
-        # Dice public job search API
+        # Dice search endpoint (mimics browser request)
         url = "https://job-search-api.svc.dhigroupinc.com/v1/dice/jobs/search"
         params = {
             "q": role,
             "countryCode": "US",
-            "radius": 30,
-            "radiusUnit": "mi",
             "page": 1,
             "pageSize": RESULTS_PER_ROLE,
             "language": "en",
-            "eid": "search",
             "filters.employmentType": "CONTRACTS",
             "filters.isRemote": "true",
             "filters.postedDate": "ONE_WEEK",
         }
         headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Accept": "application/json",
-            "x-api-key": "1YAt0R9wBg4WfsF9VB2778F5CHLAPMVH",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Origin": "https://www.dice.com",
+            "Referer": "https://www.dice.com/",
+            "x-api-key": "1YAt0R9wBg4WfsF9VB2778F5CHLAPMVH3bMt150",
         }
         resp = requests.get(url, params=params, headers=headers, timeout=15)
         if resp.status_code != 200:
-            print(f"      ⚠ Dice returned status {resp.status_code}")
-            return jobs
+            # Fallback: try Dice RSS feed
+            return scrape_dice_rss(role)
 
         data = resp.json()
         for item in data.get("data", []):
             jobs.append({
                 "title":       item.get("title", ""),
-                "company":     item.get("companyPageUrl", "").split("/")[-1] or item.get("companyName", ""),
+                "company":     item.get("companyName", ""),
                 "location":    item.get("location", "Remote"),
                 "job_type":    "Contract",
                 "min_amount":  None,
                 "max_amount":  None,
                 "currency":    "USD",
-                "date_posted": item.get("postedDate", ""),
+                "date_posted": item.get("postedDate", "")[:10] if item.get("postedDate") else "",
                 "site":        "dice",
                 "job_url":     f"https://www.dice.com/job-detail/{item.get('id', '')}",
             })
     except Exception as e:
         print(f"      ✗ Dice error: {str(e)}")
+        return scrape_dice_rss(role)
+    return jobs
+
+
+def scrape_dice_rss(role: str) -> List[Dict]:
+    """Fallback: scrape Dice via RSS feed"""
+    jobs = []
+    try:
+        import xml.etree.ElementTree as ET
+        query = role.replace(" ", "+")
+        url = f"https://www.dice.com/jobs/rss?q={query}&l=Remote&employment_type=CONTRACTS&posted=ONE_WEEK"
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"}
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            print(f"      ⚠ Dice RSS returned {resp.status_code}")
+            return jobs
+
+        root = ET.fromstring(resp.content)
+        for item in root.findall(".//item")[:RESULTS_PER_ROLE]:
+            title   = item.findtext("title", "")
+            link    = item.findtext("link", "")
+            company = item.findtext("{https://www.dice.com/}company", "")
+            pubdate = item.findtext("pubDate", "")[:10] if item.findtext("pubDate") else ""
+            jobs.append({
+                "title":       title,
+                "company":     company,
+                "location":    "Remote",
+                "job_type":    "Contract",
+                "min_amount":  None,
+                "max_amount":  None,
+                "currency":    "USD",
+                "date_posted": pubdate,
+                "site":        "dice",
+                "job_url":     link,
+            })
+    except Exception as e:
+        print(f"      ✗ Dice RSS error: {str(e)}")
     return jobs
 
 
